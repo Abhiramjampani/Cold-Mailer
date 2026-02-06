@@ -1,6 +1,6 @@
-# Cold Email Sender for SDE-1 Opportunities
+# Cold Email Sender for SDE Opportunities
 
-A Python application that reads HR contacts from an Excel file and sends personalized cold emails for SDE-1 job opportunities via Gmail.
+A Python application that reads HR contacts from an Excel file and sends personalized cold emails for SDE job opportunities via Gmail.
 
 ## Features
 
