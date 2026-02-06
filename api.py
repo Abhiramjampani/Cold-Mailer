@@ -180,7 +180,13 @@ def send_email(to_email: str, subject: str, body: str, sender_email: str = None,
 
 @app.get("/")
 def root():
-    """API root - shows available endpoints."""
+    """Serve the Cold Email Sender web app at root URL."""
+    return FileResponse("index.html")
+
+
+@app.get("/api")
+def api_info():
+    """API info - shows available endpoints."""
     return {
         "message": "Cold Email API",
         "endpoints": {
@@ -327,7 +333,7 @@ if __name__ == "__main__":
     print("\n" + "="*50)
     print("  Cold Email API")
     print("="*50)
-    print(f"  Web App: http://localhost:{port}/app")
+    print(f"  Web App: http://localhost:{port}")
     print(f"  API Docs: http://localhost:{port}/docs")
     print("="*50 + "\n")
     
