@@ -1082,11 +1082,17 @@ LinkedIn: [Your LinkedIn]</textarea>
             btn.innerHTML = '<span class="spinner"></span> Sending...';
 
             try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 45000);
+
                 const res = await fetch(`${API_URL}/send`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(getFormData())
+                    body: JSON.stringify(getFormData()),
+                    signal: controller.signal
                 });
+                clearTimeout(timeoutId);
+
                 const result = await res.json();
                 if (res.ok) {
                     showStatus(`✓ ${result.message}`, 'success');
@@ -1100,7 +1106,11 @@ LinkedIn: [Your LinkedIn]</textarea>
                     showStatus(result.detail || 'Failed to send', 'error');
                 }
             } catch (e) {
-                showStatus('Error: ' + e.message, 'error');
+                if (e.name === 'AbortError') {
+                    showStatus('Request timed out. The server may be waking up — please try again.', 'error');
+                } else {
+                    showStatus('Error: ' + e.message, 'error');
+                }
             } finally {
                 btn.disabled = false;
                 btn.innerHTML = '⚡ Send Email';

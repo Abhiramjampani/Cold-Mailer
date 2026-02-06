@@ -5,9 +5,13 @@ API docs available at: http://localhost:8000/docs
 """
 
 import smtplib
+import ssl
+import socket
 import os
 import requests
 import pandas as pd
+import traceback
+import logging
 from io import StringIO
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -19,6 +23,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import uvicorn
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -150,13 +158,15 @@ def parse_contacts(csv_data: str) -> List[dict]:
 
 
 def send_email(to_email: str, subject: str, body: str, sender_email: str = None, sender_password: str = None) -> bool:
-    """Send an email via Gmail SMTP."""
+    """Send an email via Gmail SMTP with timeout."""
     # Use provided credentials or fall back to .env
     gmail_addr = sender_email or GMAIL_ADDRESS
     gmail_pass = sender_password or GMAIL_APP_PASSWORD
     
     if not gmail_addr or not gmail_pass:
         raise HTTPException(status_code=400, detail="Gmail credentials required. Please provide your email and app password.")
+    
+    logger.info(f"Attempting to send email to {to_email} from {gmail_addr}")
     
     try:
         msg = MIMEMultipart()
@@ -165,14 +175,27 @@ def send_email(to_email: str, subject: str, body: str, sender_email: str = None,
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
         
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+        logger.info("Connecting to smtp.gmail.com:465 (timeout=30s)...")
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30, context=context) as server:
+            logger.info("Connected. Logging in...")
             server.login(gmail_addr, gmail_pass)
+            logger.info("Logged in. Sending message...")
             server.send_message(msg)
+            logger.info(f"Email sent successfully to {to_email}")
         
         return True
-    except smtplib.SMTPAuthenticationError:
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error(f"SMTP Auth failed: {e}")
         raise HTTPException(status_code=401, detail="Gmail authentication failed. Check your email and app password.")
+    except (socket.timeout, TimeoutError) as e:
+        logger.error(f"SMTP connection timed out: {e}")
+        raise HTTPException(status_code=504, detail="Connection to Gmail timed out. Please try again.")
+    except (ssl.SSLError, ConnectionRefusedError, OSError) as e:
+        logger.error(f"SMTP connection error: {e}")
+        raise HTTPException(status_code=502, detail=f"Cannot connect to Gmail SMTP server: {str(e)}")
     except Exception as e:
+        logger.error(f"Send email failed: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
 
 
@@ -234,21 +257,26 @@ def preview_email(request: SingleEmailRequest):
 @app.post("/send", response_model=SendResult)
 def send_single_email(request: SingleEmailRequest):
     """Send an email to a single recipient. Users can provide their own Gmail credentials."""
+    logger.info(f"POST /send received for {request.to_email}")
     sender = request.sender_email or GMAIL_ADDRESS
     password = request.sender_password or GMAIL_APP_PASSWORD
     
     if not sender or not password:
         raise HTTPException(status_code=400, detail="Please provide your Gmail address and App Password")
     
-    subject = (request.subject or DEFAULT_SUBJECT).format(
-        company_name=request.company_name,
-        hr_name=request.hr_name
-    )
-    body = (request.body or DEFAULT_BODY).format(
-        company_name=request.company_name,
-        hr_name=request.hr_name,
-        sender_email=sender
-    )
+    try:
+        subject = (request.subject or DEFAULT_SUBJECT).format(
+            company_name=request.company_name,
+            hr_name=request.hr_name
+        )
+        body = (request.body or DEFAULT_BODY).format(
+            company_name=request.company_name,
+            hr_name=request.hr_name,
+            sender_email=sender
+        )
+    except KeyError as e:
+        logger.error(f"Template variable error: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid template variable: {e}. Use {{hr_name}}, {{company_name}}, or {{sender_email}}.")
     
     send_email(request.to_email, subject, body, sender, password)
     
