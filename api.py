@@ -158,7 +158,7 @@ def parse_contacts(csv_data: str) -> List[dict]:
 
 
 def send_email(to_email: str, subject: str, body: str, sender_email: str = None, sender_password: str = None) -> bool:
-    """Send an email via Gmail SMTP with timeout."""
+    """Send an email via Gmail SMTP with timeout. Tries port 587 (STARTTLS) first, then 465 (SSL)."""
     # Use provided credentials or fall back to .env
     gmail_addr = sender_email or GMAIL_ADDRESS
     gmail_pass = sender_password or GMAIL_APP_PASSWORD
@@ -168,22 +168,40 @@ def send_email(to_email: str, subject: str, body: str, sender_email: str = None,
     
     logger.info(f"Attempting to send email to {to_email} from {gmail_addr}")
     
+    msg = MIMEMultipart()
+    msg['From'] = gmail_addr
+    msg['To'] = to_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
+    
+    # Try port 587 (STARTTLS) first — works on most cloud platforms including Render
     try:
-        msg = MIMEMultipart()
-        msg['From'] = gmail_addr
-        msg['To'] = to_email
-        msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'plain'))
-        
-        logger.info("Connecting to smtp.gmail.com:465 (timeout=30s)...")
+        logger.info("Trying smtp.gmail.com:587 STARTTLS (timeout=30s)...")
+        server = smtplib.SMTP('smtp.gmail.com', 587, timeout=30)
+        server.ehlo()
+        context = ssl.create_default_context()
+        server.starttls(context=context)
+        server.ehlo()
+        logger.info("STARTTLS established. Logging in...")
+        server.login(gmail_addr, gmail_pass)
+        logger.info("Logged in. Sending message...")
+        server.send_message(msg)
+        server.quit()
+        logger.info(f"Email sent successfully to {to_email} via port 587")
+        return True
+    except Exception as e587:
+        logger.warning(f"Port 587 failed: {e587}")
+    
+    # Fallback: try port 465 (direct SSL)
+    try:
+        logger.info("Trying smtp.gmail.com:465 SSL (timeout=30s)...")
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30, context=context) as server:
-            logger.info("Connected. Logging in...")
+            logger.info("SSL connected. Logging in...")
             server.login(gmail_addr, gmail_pass)
             logger.info("Logged in. Sending message...")
             server.send_message(msg)
-            logger.info(f"Email sent successfully to {to_email}")
-        
+            logger.info(f"Email sent successfully to {to_email} via port 465")
         return True
     except smtplib.SMTPAuthenticationError as e:
         logger.error(f"SMTP Auth failed: {e}")
@@ -192,8 +210,8 @@ def send_email(to_email: str, subject: str, body: str, sender_email: str = None,
         logger.error(f"SMTP connection timed out: {e}")
         raise HTTPException(status_code=504, detail="Connection to Gmail timed out. Please try again.")
     except (ssl.SSLError, ConnectionRefusedError, OSError) as e:
-        logger.error(f"SMTP connection error: {e}")
-        raise HTTPException(status_code=502, detail=f"Cannot connect to Gmail SMTP server: {str(e)}")
+        logger.error(f"SMTP connection error on both ports: 587 failed ({e587}), 465 failed ({e})")
+        raise HTTPException(status_code=502, detail=f"Cannot connect to Gmail. Port 587: {e587} | Port 465: {e}")
     except Exception as e:
         logger.error(f"Send email failed: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
